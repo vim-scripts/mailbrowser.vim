@@ -1,69 +1,82 @@
 " File: mailbrowser.vim
 " Author: Mark Waggoner (mark@wagnell.com)
-" Last Change: 2001 Aug 15
-" Version: 1.2
+" Last Change: 2001 Aug 20
+" Version: 1.3
 "-----------------------------------------------------------------------------
-" This plugin allows one to view a mail collection similar to the way one
-" would view it in a mailer.
-"
-" Normally, this file will reside in the plugins directory and be
-" automatically sourced.  If not, you must manually source this file
-" using :source mailbrowser.vim
-"
-" :Mail <filename>
-"   will bring up an index of the mail contained in the specified file
-" :Mail
-"   will bring up an index of the mail contained in the file specified by the
-"   $MAIL environment variable
-" :SMail
-"   will open a new window and then do what :Mail would have done
-"
-"
-" Keys defined in mail browser index
-"    s = select what to sort by
-"    r = reverse the current sort order
-"    o = open the mail under the cursor in a separate window
-"        <doubleclick> will do the same as o
-" <cr> = open the mail under the cursor in the current window
-"    u = update the index
-"    d = mark for deletion (doesn't really work)
-"
-"
-" When viewing a mail message:
-"    i = return to index
-"    a = toggle viewing all headers
-"
-"
-" Globals of use:
-"   g:mailbrowserSortBy 
-"       selects the default sort. Choices are 'subject', 'index', or 'from'
-"       with the optional addition of 'reverse'
-"       Example (and default):
-"           let g:mailbrowserSortBy='reverse subject'
-"
-"   g:mailbrowserMailPath
-"       Chose the directory to look in for named mail files
-"       Example (and default):
-"           let g:mailbrowserMailPath = $HOME . "/Mail"
-"
-"   g:mailbrowserFromLength
-"       Chose how many characters of the "from" address to display
-"       Example (and default):
-"           let g:mailbrowserFromLength = 25
-"
-"   g:mailbrowserShowHeaders
-"       Choose which mail headers will be displayed as part of the message.
-"       If this is not empty, then headers that do not match this will not be
-"       displayed.
-"       Example (and default):
-"           let g:mailbrowserShowHeaders = '^\(Subject:\|Date:\|From:\|To:\|Cc:\)'
-"
-"   g:mailbrowserHideHeaders
-"       Choose which mail headers will NOT be displayed as part of the
-"       message.  If this is not empty, then headers that match this will not
-"       be displayed.
-"       Example (and default):
-"           let g:mailbrowserHideHeaders = ""
+
+let s:mailbrowserHelp = "*mailbrowser.txt*	How to use the mailbrowser plugin
+\\n
+\\n This plugin allows one to view a mail collection similar to the way one
+\\n would view it in a mailer.
+\\n
+\\n Normally, this file will reside in the plugins directory and be
+\\n automatically sourced.  If not, you must manually source this file
+\\n using :source mailbrowser.vim
+\\n
+\\n :Mail <filename>
+\\n   will bring up an index of the mail contained in the specified file
+\\n :Mail
+\\n   will bring up an index of the mail contained in the file specified by the
+\\n   $MAIL environment variable
+\\n :SMail
+\\n   will open a new window and then do what :Mail would have done
+\\n
+\\n
+\\n Keys defined in mail browser index
+\\n    s = select what to sort by
+\\n    r = reverse the current sort order
+\\n    o = open the mail under the cursor in a separate window
+\\n        <doubleclick> will do the same as o
+\\n <cr> = open the mail under the cursor in the current window
+\\n    u = update the index
+\\n    d = mark for deletion (doesn't really work)
+\\n
+\\n
+\\n When viewing a mail message:
+\\n    i = return to index
+\\n    a = toggle viewing all headers
+\\n    J = go to next message down in the index
+\\n    K = go to next message up in the index
+\\n
+\\n
+\\n Globals of use:
+\\n   g:mailbrowserSortBy 
+\\n       selects the default sort. Choices are 'subject', 'index', or 'from'
+\\n       with the optional addition of 'reverse'
+\\n       Example (and default):
+\\n           let g:mailbrowserSortBy='reverse subject'
+\\n
+\\n   g:mailbrowserMailPath
+\\n       Chose the directory to look in for named mail files
+\\n       Example (and default):
+\\n           let g:mailbrowserMailPath = $HOME . \"/Mail\"
+\\n
+\\n   g:mailbrowserFromLength
+\\n       Chose how many characters of the \"from\" address to display
+\\n       Example (and default):
+\\n           let g:mailbrowserFromLength = 25
+\\n
+\\n   g:mailbrowserShowHeaders
+\\n       Choose which mail headers will be displayed as part of the message.
+\\n       If this is not empty, then headers that do not match this will not be
+\\n       displayed.
+\\n       Example (and default):
+\\n           let g:mailbrowserShowHeaders = '^\(Subject:\|Date:\|From:\|To:\|Cc:\)'
+\\n
+\\n   g:mailbrowserHideHeaders
+\\n       Choose which mail headers will NOT be displayed as part of the
+\\n       message.  If this is not empty, then headers that match this will not
+\\n       be displayed.
+\\n       Example (and default):
+\\n           let g:mailbrowserHideHeaders = \"\"
+\\n
+\\n Changes in 1.3
+\\n   Fixed bug in globbing of filenames
+\\n   Auto-install help file when first run
+\\n   Added J and K mappings in mail window
+\\n
+\"
+
 "   
 "
 "-----------------------------------------------------------------------------
@@ -84,6 +97,23 @@
 "if !exists("g:emailindexDateFormat")
 "  let g:emailindexDateFormat="%d %b %Y %H:%M"
 "endif
+
+"---
+" Try to check if help is installed
+"
+let s:scriptdate = getftime(expand("<sfile>:p"))
+let s:helpdir    = expand("<sfile>:p:h:h") . "/doc"
+let s:helpfile   = s:helpdir . "/mailbrowser.txt"
+if expand(s:helpfile) == "" || (getftime(s:helpfile) < getftime(expand("<sfile>:p")))
+    exec 'silent new' s:helpfile
+    silent %d
+    let @" = s:mailbrowserHelp
+    silent put
+    silent 1d
+    silent wq
+    exec 'silent helptags' s:helpdir
+    echomsg "mailbrowser help updated!"
+endif
 
 " Field to sort by
 if !exists("g:mailbrowserSortBy")
@@ -148,14 +178,15 @@ function! s:BrowseEmail(newwindow,filename)
 
   " Can't find the file directly, try looking for it in the path supplied
   if !filereadable(filename)
-    let filename = globpath(g:mailbrowserMailPath,filename)
+    let globfiles = globpath(g:mailbrowserMailPath,filename)
     " Only take the first one found
-    let filename = substitute(filename,"\<Nul>.*$",'','')
+    let globfile = substitute(globfiles,"\<NL>.*$",'','')
     " Can't find anything - then abort
-    if !filereadable(filename)
+    if !filereadable(globfile)
       echomsg 'File' filename 'does not exist!'
       return
     endif
+    let filename = globfile
   endif
 
   " Get the name of the mail buffer
@@ -252,6 +283,8 @@ function! s:BrowseEmail(newwindow,filename)
   nnoremap <silent> <buffer> i  :call <SID>GotoWindow(b:mailindex,'e')<cr>
   nnoremap <silent> <buffer> a  :call <SID>ToggleHeaders()<cr>
   nnoremap <silent> <buffer> d  :call <SID>DeleteMail()<cr>
+  nnoremap <silent> <buffer> J  :call <SID>NextMail("+1")<cr>
+  nnoremap <silent> <buffer> K  :call <SID>NextMail("-1")<cr>
   hide
 
   "----------------------------
@@ -617,9 +650,30 @@ endfunction
 "---
 "
 "
+function! s:NextMail(offset)
+   " Do we close the index when done?
+  let windowswitch = "e"
+  if bufwinnr(b:mailindex) >= 0
+      let windowswitch = "new"
+  endif
+  call s:GotoWindow(b:mailindex,windowswitch)
+  " Check if we're into the header
+  if getline(line(".")+a:offset) !~ '^"'
+    exec a:offset
+  endif
+  call s:OpenMail(windowswitch)
+endfunction
+
+"---
+"
+"
 function! s:OpenMail(new)
     " Get the index number from the current line
-    let index = substitute(strpart(getline("."),0,b:indexlength),'\v^\s+','','')
+    let l = getline(".")
+    if (l =~ '^"') 
+        return
+    endif
+    let index = substitute(strpart(l,0,b:indexlength),'\v^\s+','','')
     call s:GotoWindow(b:maildata,'new')
     exec "0/^let index=" . index
     exec getline(".")
