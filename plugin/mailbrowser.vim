@@ -1,7 +1,7 @@
-" File: emailindex.vim
+" File: mailbrowser.vim
 " Author: Mark Waggoner (mark@wagnell.com)
-" Last Change: 2001 May 23
-" Version: 1.0
+" Last Change: 2001 Jul 25
+" Version: 1.1
 "-----------------------------------------------------------------------------
 " This plugin allows one to view a mail collection similar to the way one
 " would view it in a mailer.
@@ -17,7 +17,6 @@
 "   $MAIL environment variable
 " :SMail
 "   will open a new window and then do what :Mail would have done
-"   doesn't work currently
 "
 "-----------------------------------------------------------------------------
 "=============================================================================
@@ -83,7 +82,7 @@ let s:escregexp = '/*^$.~\'
 "   b:mailindex
 "   b:mailview
 "
-function! s:BrowseEmail(filename)
+function! s:BrowseEmail(newwindow,filename)
 
   " Figure out which file to look at
   if a:filename == ""
@@ -122,7 +121,7 @@ function! s:BrowseEmail(filename)
   else
     " If index isn't already in a window and the current window has modified
     " data, create a new window
-    if &modified
+    if &modified || a:newwindow
       new
     endif
     " Does index buffer already exist?  If so, edit it, if not, set the name
@@ -141,12 +140,12 @@ function! s:BrowseEmail(filename)
   let b:mailview  = mailview
  
   " Set up keyboard commands for the index window
-  nnoremap <buffer> <2-leftmouse>  :call <SID>OpenMail('new')<cr>
-  nnoremap <buffer> o  :call <SID>OpenMail('new')<cr>
-  nnoremap <buffer> s  :call <SID>SortSelect()<cr>
-  nnoremap <buffer> r  :call <SID>SortReverse()<cr>
-  nnoremap <buffer> <cr> :call <SID>OpenMail('e')<cr>
-  nnoremap <buffer> u  :call <SID>BuildIndex()<cr>
+  nnoremap <silent> <buffer> <2-leftmouse>  :call <SID>OpenMail('new')<cr>
+  nnoremap <silent> <buffer> o  :call <SID>OpenMail('new')<cr>
+  nnoremap <silent> <buffer> s  :call <SID>SortSelect()<cr>
+  nnoremap <silent> <buffer> r  :call <SID>SortReverse()<cr>
+  nnoremap <silent> <buffer> <cr> :call <SID>OpenMail('e')<cr>
+  nnoremap <silent> <buffer> u  :call <SID>BuildIndex()<cr>
 
   " syntax highlighting
   if hlexists("mailindexdata")
@@ -161,9 +160,13 @@ function! s:BrowseEmail(filename)
   if hlexists("mailfrom")
     syn clear mailfrom
   endif
+  if hlexists("mailflag")
+    syn clear mailflag
+  endif
   syn match mailindexline '^[^"].*' contains=CONTAINED
   let datecolumn=3
-  exec 'syn match maildate ".\%>' . datecolumn . 'v\%<' . (datecolumn+17) .'v" contained'
+  exec 'syn match mailflag ".\%>1v\%<3v" contained'
+  exec 'syn match maildate ".\%>' . datecolumn . 'v\%<' . (datecolumn+16) .'v" contained'
   exec 'syn match mailfrom ".\%>' . (datecolumn+16) . 'v\%<' . (datecolumn+17+g:mailbrowserFromLength) . 'v" contained'
   exec 'syn match mailsubject ".\%>' . (datecolumn+17+g:mailbrowserFromLength) . 'v" contained'
   syn match mailindexdata "«.\+$" contained
@@ -171,6 +174,7 @@ function! s:BrowseEmail(filename)
   hi link maildate        Identifier
   hi link mailfrom        Statement
   hi link mailsubject     Type
+  hi link mailflag        Constant
 
   " highlight the displayed message
   highlight clear DisplayedMessage
@@ -204,8 +208,8 @@ function! s:BrowseEmail(filename)
   let b:showheaders=g:mailbrowserShowHeaders
   let b:hideheaders=g:mailbrowserHideHeaders
   setlocal filetype=mail
-  nnoremap <buffer> i  :call <SID>GotoWindow(b:mailindex,'e')<cr>
-  nnoremap <buffer> a  :call <SID>ToggleHeaders()<cr>
+  nnoremap <silent> <buffer> i  :call <SID>GotoWindow(b:mailindex,'e')<cr>
+  nnoremap <silent> <buffer> a  :call <SID>ToggleHeaders()<cr>
   hide
 
   " Should be back in the index window now
@@ -278,10 +282,11 @@ function! s:GetHeaders()
     let from = substitute(from,'\(\S\+\).*','\1','')
     let date = strpart(date,0,11) . strpart(date,20,4)
     let subject = '----------'
+    let flag = " "
 
     " Try to find the headers we are interested in or blank line,
     " indicating end of headers
-    while search('\v^((From\:)|(Subject\:)|(\n))','W')
+    while search('\v^((From\:)|(Subject\:)|(Status\:)|(\n))','W')
         let l = getline(".")
 
         " End of headers?
@@ -290,7 +295,6 @@ function! s:GetHeaders()
             break
         endif
 
-        " From: line?
         if l =~ '^From:'
             let from = substitute(l,'^From:\s\+','','')
             let from = substitute(from,'\s*<[^>]\+>\s*','','')
@@ -298,9 +302,16 @@ function! s:GetHeaders()
             continue
         endif
 
-        " Subject: line?
         if l =~ '^Subject:'
             let subject= substitute(l,'^Subject:\s\+','','')
+            continue
+        endif
+
+        if l =~ '^Status:'
+            let status = substitute(l,'^Status:\s\+','','')
+            if status !~# 'R'
+                let flag="N"
+            endif
             continue
         endif
 
@@ -317,7 +328,6 @@ function! s:GetHeaders()
     endif
 
     let end=line(".")
-    let flag = " "
     let from = strpart(from . s:frompadding,0,g:mailbrowserFromLength)
     let @" = flag . " " . date . " " . from . " " . subject . ' «' . start . ',' . headerend . ',' . end 
     +1
@@ -399,7 +409,7 @@ endfunction
 
 function! s:GetMailMsg(start,end,new)
     call s:GotoWindow(b:maildata,'new')
-    exec a:start . "," a:end . "y a"
+    exec "silent " . a:start . "," a:end . "y a"
     call s:CloseWindow(b:maildata)
     call s:GotoWindow(b:mailview,a:new)
     setlocal modifiable
@@ -416,17 +426,17 @@ endfunction
 " Extract headers that we want to display
 "
 function! s:FilterHeaders()
-    1,/^$/-1g/^/call s:FilterHeader()
+    silent 1,/^$/-1g/^/call s:FilterHeader()
 endfunction
 
 function! s:FilterHeader()
     let l=getline(".")
     if (b:hideheaders != "") && (l =~ b:hideheaders)
-        delete
+        silent delete
     endif
 
     if (b:showheaders != "") && (l !~ b:showheaders)
-        delete
+        silent delete
     endif
 endfunction
 
@@ -602,5 +612,6 @@ endfunction
 "--
 " Set up the Mail Command
 "
-command! -n=? -complete=dir Mail :call s:BrowseEmail('<args>')
+command! -n=? -complete=dir Mail :call s:BrowseEmail(0,'<args>')
+command! -n=? -complete=dir SMail :call s:BrowseEmail(1,'<args>')
 
