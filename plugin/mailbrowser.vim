@@ -1,7 +1,7 @@
 " File: mailbrowser.vim
 " Author: Mark Waggoner (mark@wagnell.com)
-" Last Change: 2001 Jul 25
-" Version: 1.1
+" Last Change: 2001 Aug 15
+" Version: 1.2
 "-----------------------------------------------------------------------------
 " This plugin allows one to view a mail collection similar to the way one
 " would view it in a mailer.
@@ -17,6 +17,54 @@
 "   $MAIL environment variable
 " :SMail
 "   will open a new window and then do what :Mail would have done
+"
+"
+" Keys defined in mail browser index
+"    s = select what to sort by
+"    r = reverse the current sort order
+"    o = open the mail under the cursor in a separate window
+"        <doubleclick> will do the same as o
+" <cr> = open the mail under the cursor in the current window
+"    u = update the index
+"    d = mark for deletion (doesn't really work)
+"
+"
+" When viewing a mail message:
+"    i = return to index
+"    a = toggle viewing all headers
+"
+"
+" Globals of use:
+"   g:mailbrowserSortBy 
+"       selects the default sort. Choices are 'subject', 'index', or 'from'
+"       with the optional addition of 'reverse'
+"       Example (and default):
+"           let g:mailbrowserSortBy='reverse subject'
+"
+"   g:mailbrowserMailPath
+"       Chose the directory to look in for named mail files
+"       Example (and default):
+"           let g:mailbrowserMailPath = $HOME . "/Mail"
+"
+"   g:mailbrowserFromLength
+"       Chose how many characters of the "from" address to display
+"       Example (and default):
+"           let g:mailbrowserFromLength = 25
+"
+"   g:mailbrowserShowHeaders
+"       Choose which mail headers will be displayed as part of the message.
+"       If this is not empty, then headers that do not match this will not be
+"       displayed.
+"       Example (and default):
+"           let g:mailbrowserShowHeaders = '^\(Subject:\|Date:\|From:\|To:\|Cc:\)'
+"
+"   g:mailbrowserHideHeaders
+"       Choose which mail headers will NOT be displayed as part of the
+"       message.  If this is not empty, then headers that match this will not
+"       be displayed.
+"       Example (and default):
+"           let g:mailbrowserHideHeaders = ""
+"   
 "
 "-----------------------------------------------------------------------------
 "=============================================================================
@@ -38,9 +86,9 @@
 "endif
 
 " Field to sort by
-"if !exists("g:emailindexSortBy")
-"  let g:emailindexSortBy='arrival'
-"endif
+if !exists("g:mailbrowserSortBy")
+  let g:mailbrowserSortBy='reverse index'
+endif
 
 
 " Directories to look in for mail folders
@@ -56,7 +104,7 @@ endif
 " Which headers do you want to see or NOT see
 "
 if !exists("g:mailbrowserShowHeaders") 
-  let g:mailbrowserShowHeaders = '^\(Subject:\|Date:\|From:\)'
+  let g:mailbrowserShowHeaders = '^\(Subject:\|Date:\|From:\|To:\|Cc:\)'
 endif
 if !exists("g:mailbrowserHideHeaders")
   let g:mailbrowserHideHeaders = ""
@@ -71,16 +119,18 @@ let s:escregexp = '/*^$.~\'
 " If no argument is given, it will start on the $MAIL environment variable.
 " If $MAIL does not exist, it doesn't do anything but print an error message
 "
-" Three buffers are created:
+" Four buffers are created:
 "   The raw mail file
 "   A buffer for the index
 "   A buffer for displaying a single mail message
+"   A buffer containing data about each mail message so we can quickly access them
 "
 " These three variables are set in each of the three buffers to point to the
 " other buffers:
-"   b:maildata
+"   b:mailfile
 "   b:mailindex
 "   b:mailview
+"   b:maildata
 "
 function! s:BrowseEmail(newwindow,filename)
 
@@ -110,11 +160,32 @@ function! s:BrowseEmail(newwindow,filename)
 
   " Get the name of the mail buffer
   let filename = fnamemodify(filename,":p")
-  " Construct names for the index buffer and the message view buffer
-  let maildata = filename
-  let mailindex = fnamemodify(maildata,":t") . "-index"
-  let mailview  = fnamemodify(maildata,":t") . "-message"
- 
+  " Construct names for the scratch buffers that we will use
+  let mailfile = filename
+  let mailindex = fnamemodify(mailfile,":t") . "-index"
+  let mailview  = fnamemodify(mailfile,":t") . "-message"
+  let maildata  = fnamemodify(mailfile,":t") . "-data"
+
+  " Figure out the sort order for the index
+  if g:mailbrowserSortBy =~ '\v\creverse'
+      let sortdirection = -1
+      let sortdirlabel = "reverse "
+  else
+      let sortdirection = 1
+      let sortdirlabel = ""
+  endif
+  if g:mailbrowserSortBy =~ '\v\csubject'
+      let sorttype = "subject"
+  elseif g:mailbrowserSortBy =~ '\v\cfrom'
+      let sorttype = "from"
+  else
+      let sorttype = "index"
+  endif
+  let sortby=sortdirlabel . sorttype
+
+
+  "----------------------------
+  " Go to or create the index
   " Is the index already in a window somewhere?  If so, move to that window
   if bufwinnr(mailindex) > 0
     exec bufwinnr(mailindex) . 'wincmd w'
@@ -135,81 +206,66 @@ function! s:BrowseEmail(newwindow,filename)
   endif
 
   " Save the names of the files in buffer local variables
-  let b:maildata  = maildata
+  let b:mailfile  = mailfile
   let b:mailindex = mailindex
   let b:mailview  = mailview
+  let b:maildata  = maildata
+  let b:sortdirection = sortdirection
+  let b:sorttype      = sorttype
+  let b:sortby        = sortby
  
   " Set up keyboard commands for the index window
   nnoremap <silent> <buffer> <2-leftmouse>  :call <SID>OpenMail('new')<cr>
   nnoremap <silent> <buffer> o  :call <SID>OpenMail('new')<cr>
-  nnoremap <silent> <buffer> s  :call <SID>SortSelect()<cr>
+  nnoremap          <buffer> s  :call <SID>SortSelect()<cr>
   nnoremap <silent> <buffer> r  :call <SID>SortReverse()<cr>
   nnoremap <silent> <buffer> <cr> :call <SID>OpenMail('e')<cr>
   nnoremap <silent> <buffer> u  :call <SID>BuildIndex()<cr>
-
-  " syntax highlighting
-  if hlexists("mailindexdata")
-    syn clear mailindexdata
-  endif
-  if hlexists("mailindexline")
-    syn clear mailindexline
-  endif
-  if hlexists("maildate")
-    syn clear maildate
-  endif
-  if hlexists("mailfrom")
-    syn clear mailfrom
-  endif
-  if hlexists("mailflag")
-    syn clear mailflag
-  endif
-  syn match mailindexline '^[^"].*' contains=CONTAINED
-  let datecolumn=3
-  exec 'syn match mailflag ".\%>1v\%<3v" contained'
-  exec 'syn match maildate ".\%>' . datecolumn . 'v\%<' . (datecolumn+16) .'v" contained'
-  exec 'syn match mailfrom ".\%>' . (datecolumn+16) . 'v\%<' . (datecolumn+17+g:mailbrowserFromLength) . 'v" contained'
-  exec 'syn match mailsubject ".\%>' . (datecolumn+17+g:mailbrowserFromLength) . 'v" contained'
-  syn match mailindexdata "«.\+$" contained
-  hi link mailindexdata   Ignore
-  hi link maildate        Identifier
-  hi link mailfrom        Statement
-  hi link mailsubject     Type
-  hi link mailflag        Constant
-
-  " highlight the displayed message
-  highlight clear DisplayedMessage
-  highlight DisplayedMessage ctermfg=white ctermbg=darkred guibg=darkred  guifg=white term=bold cterm=bold
-
-  " Variables indicating sort order of index
-  let b:sortdirection=1
-  let b:sortdirlabel = ""
-  let b:sorttype = ""
-  let b:sortby = "file order"
+  nnoremap <silent> <buffer> d  :call <SID>DeleteMail()<cr>
 
 
+  "----------------------------
   " Open the mail data file and make it unmodifiable to protect it
-  exec "silent new" maildata
+  exec "silent new" mailfile
   setlocal nomodifiable
   setlocal noswapfile
   setlocal bufhidden=hide
   setlocal nowrap
   setlocal autoread
-  let b:maildata  = maildata
+  let b:mailfile  = mailfile
   let b:mailindex = mailindex
   let b:mailview  = mailview
+  let b:maildata  = maildata
   hide
 
+  "----------------------------
   " Create a buffer for viewing mail messages
   exec "silent new" mailview
   call s:SetScratchWindow()
-  let b:maildata  = maildata
+  let b:mailfile  = mailfile
   let b:mailindex = mailindex
   let b:mailview  = mailview
+  let b:maildata  = maildata
   let b:showheaders=g:mailbrowserShowHeaders
   let b:hideheaders=g:mailbrowserHideHeaders
   setlocal filetype=mail
   nnoremap <silent> <buffer> i  :call <SID>GotoWindow(b:mailindex,'e')<cr>
   nnoremap <silent> <buffer> a  :call <SID>ToggleHeaders()<cr>
+  nnoremap <silent> <buffer> d  :call <SID>DeleteMail()<cr>
+  hide
+
+  "----------------------------
+  " Create a buffer for holding mail data
+  exec "silent new" maildata
+  call s:SetScratchWindow()
+  let b:mailfile  = mailfile
+  let b:mailindex = mailindex
+  let b:mailview  = mailview
+  let b:maildata  = maildata
+  let b:showheaders=g:mailbrowserShowHeaders
+  let b:hideheaders=g:mailbrowserHideHeaders
+  let b:sortdirection = sortdirection
+  let b:sorttype      = sorttype
   hide
 
   " Should be back in the index window now
@@ -224,69 +280,160 @@ endfunction
 " Should be called with cursor in the index window
 "
 function! s:BuildIndex()
-  " call s:GotoWindow(b:mailindex,'new')
+  " First extract all the data from the mail file
+  call s:BuildData()
+  call s:SortData(b:maxindex,1)
+endfunction
+
+"--
+" Copy information from the data buffer into a more human readable index
+"
+function! s:DataToIndex(cursorindex,cursorcolumn)
+
+  call s:GotoWindow(b:mailindex,'new')
   setlocal modifiable
   " Empty the window
-  1,$d
+  silent 1,$d
   " Add header
-  let @a = "\"Mail from " . b:maildata . " sorted by " . b:sortby . "\n\"="
-  put a
+  let @" = "\"Mail from " . b:mailfile . " sorted by " . b:sortby . "\n\"="
+  put
 
+  " Go to the data window
+  call s:GotoWindow(b:maildata,'new')
+
+  " Prepare to right justify the index
+  let indexlength = b:indexlength
+  let spaces = "      "
+  while strlen(spaces) < indexlength
+      let spaces = spaces . "      "
+  endwhile
+
+  " Start at the beginning and find all the headers
+  0
+  while 1
+      let l = getline(".")
+      exec l
+      let pad = strpart(spaces,0,indexlength - strlen(index))
+      let @" = pad. index . " " . flag . " " . date . " " . from . " " . subject
+      wincmd p
+      $put
+      " return to data
+      wincmd p
+      if line(".") == line("$")
+          break
+      endif
+      +1
+  endwhile
+  " Hide the data window
+  hide
+
+  " Delete first empty line in index
+  0d
+  " Save the length of the count field
+  let b:indexlength = indexlength
+
+  " Protect it
+  setlocal nomodifiable
+
+  " Move cursor to selected item
+  exec '/^\s*' . a:cursorindex . ' /'
+  execute "normal!" a:cursorcolumn . "|"
+
+  " syntax highlighting
+  if hlexists("mailindexline")
+    syn clear mailindexline
+  endif
+  if hlexists("mailindex")
+    syn clear mailindex
+  endif
+  if hlexists("maildate")
+    syn clear maildate
+  endif
+  if hlexists("mailfrom")
+    syn clear mailfrom
+  endif
+  if hlexists("mailflag")
+    syn clear mailflag
+  endif
+  syn match mailindexline '^[^"].*' contains=CONTAINED
+  let s = 0
+  let e = b:indexlength+2
+  exec 'syn match mailindex   "\%>' . s . 'v\%<' . e . 'v." contained'
+  let s = e - 1
+  let e = s + 2 + 1
+  exec 'syn match mailflag    "\%>' . s . 'v\%<' . e . 'v." contained'
+  let s = e - 1
+  let e = s + 16 + 1
+  exec 'syn match maildate    "\%>' . s . 'v\%<' . e . 'v." contained'
+  let s = e - 1
+  let e = s + g:mailbrowserFromLength + 1
+  exec 'syn match mailfrom    "\%>' . s . 'v\%<' . e . 'v." contained'
+  let s = e - 1
+  exec 'syn match mailsubject "\%>' . s . 'v." contained'
+  hi link mailindex       Normal
+  hi link mailflag        Constant
+  hi link maildate        Identifier
+  hi link mailfrom        Statement
+  hi link mailsubject     Type
+
+  " highlight the displayed message
+  highlight clear DisplayedMessage
+  highlight DisplayedMessage ctermfg=white ctermbg=darkred guibg=darkred  guifg=white term=bold cterm=bold
+endfunction
+
+"-- 
+" Extract data about each mail from the mail file
+"
+function! s:BuildData()
+  call s:GotoWindow(b:maildata,'new')
+  setlocal modifiable
+  " Empty the window
+  silent 1,$d
+
+  " Count number of messages
+  let index = 0
+
+  " Go to the email window
+  call s:GotoWindow(b:mailfile,'new')
+
+  " See if it needs to be reloaded
+  silent checktime
+  
   " Make a padding string to use in GetHeaders()
   let s:frompadding = "               "
   while strlen(s:frompadding) < g:mailbrowserFromLength
       let s:frompadding = s:frompadding . "               "
   endwhile
 
-  " Go to the email window
-  call s:GotoWindow(b:maildata,'new')
-  silent checktime
-  let ic = &l:ignorecase
-  let &l:ignorecase=0
+
+  " Flag whether we've finished or not
+  let keepgoing = 1
 
   " Start at the beginning and find all the headers
   0
-  while s:GetHeaders()
-      " go back to index
-      wincmd p
-      $put
-      " return to data
-      wincmd p
-  endwhile
-  " Hide the data window
-  let &l:ignorecase=ic
-  hide
-
-  " Should be in the index window
-  0d
-  setlocal nomodifiable
-endfunction
-
-"--
-" Should be called with cursor in a line that starts a mail message
-" ^From sender date
-"
-" Save the starting line number
-" get received time from the From line
-" Then look for Subject:, From:, and start of next message.  Save the last
-" line number of the message
-"
-function! s:GetHeaders()
+  while keepgoing
+    " Get the line number of the first line of the message
     let start = line(".")
+    " Get the contents of the first line
     let l = getline(".")
-    if l !~ '^From\s\+\(\S\+\)\s\+\(.*\)'
-        return 0
+    " Is it a proper mail header?
+    if l !~ '\C^From\s\+\(\S\+\)\s\+\(.*\)'
+        let keepgoing = 0
+        continue
     endif
+
+    " Increase the count and initialize data
+    let index = index + 1
     let from = substitute(l,'^From\s\+','','')
     let date = substitute(from,'\S\+\s\+','','')
     let from = substitute(from,'\(\S\+\).*','\1','')
     let date = strpart(date,0,11) . strpart(date,20,4)
-    let subject = '----------'
-    let flag = " "
+    let subject = ''
+    let flag = "N"
 
     " Try to find the headers we are interested in or blank line,
     " indicating end of headers
-    while search('\v^((From\:)|(Subject\:)|(Status\:)|(\n))','W')
+    while keepgoing && search('\v\C^((From\:)|(Subject\:)|(Status\:)|(\n))','W')
         let l = getline(".")
 
         " End of headers?
@@ -311,28 +458,72 @@ function! s:GetHeaders()
             let status = substitute(l,'^Status:\s\+','','')
             if status !~# 'R'
                 let flag="N"
+            else
+                let flag=" "
             endif
             continue
         endif
 
         "Shouldn't get here!
         echoerr "Error Extracting Mail Headers"
-        return 0
+        let keepgoing = 0
+        continue
 
     endwhile
 
-    if !search('\v^From ','W')
+    " Search for the next message - or the end of the file
+    if !search('\v\C^From ','W')
         $
     else
         -1
     endif
 
+    " The line number of the last line of the mail message
     let end=line(".")
+
+    " Shorten or lengthen the from to the selected length
     let from = strpart(from . s:frompadding,0,g:mailbrowserFromLength)
-    let @" = flag . " " . date . " " . from . " " . subject . ' «' . start . ',' . headerend . ',' . end 
+
+    " Make sure we have legal syntax for the vimscript lines we'll create
+    let from = escape(from,'\"')
+    let subject = escape(subject,'\"')
+
+    " Create a vimscript line that we'll keep in the data buffer
+    let @" = 'let index=' . index . 
+    \        " | let start=" . start . 
+    \        " | let headerend=" . headerend . 
+    \        " | let end=" . end . 
+    \        " | let flag='" . flag . "'" .
+    \        " | let date='" . date . "'" .
+    \        ' | let from="' . from . '"' . 
+    \        ' | let subject="' . subject . '"'
+
+    " Go to next message
     +1
-    return 1
+
+    " go back to data
+    wincmd p
+    " Save data
+    $put
+    " return to file
+    wincmd p
+  endwhile
+
+  " Hide the main file
+  hide
+  " Remove first (blank) line in data window
+  silent 0d
+
+  " NOT NEEDED
+  " right justify message number
+  let b:maxindex = index
+  let b:indexlength = strlen(b:maxindex)
+
+  " Protect it
+  setlocal nomodifiable
+
 endfunction
+
 
 "--
 " Close a selected window
@@ -352,17 +543,11 @@ endfunction
 " Go to a selected window
 "
 function! s:GotoWindow(name,new)
-
-  " If buffer exists, get it in a window
+  " Buffers should already exist when calling this function
   if !bufexists(a:name)
     echoerr "Couldn't find buffer for" a:name
     return
-    " buffer for index doesn't exist, so open a new window for it
-"   exec a:new
-"   exec "silent file" a:name
-"   call s:SetScratchWindow()
   endif
-
   " Already in a window? Then go there
   if bufwinnr(a:name) >= 0
       exec bufwinnr(a:name) . 'wincmd w'
@@ -370,7 +555,6 @@ function! s:GotoWindow(name,new)
   else
       exec "silent " a:new a:name
   endif
-
 endfunction
 
 function! s:SetScratchWindow()
@@ -384,18 +568,63 @@ function! s:SetScratchWindow()
   setlocal filetype=
 endfunction
 
+"---
+" Mark a mail item as "deleted"  does not actually delete anything
+"
+function! s:DeleteMail()
+  " Are we in the index window?
+  if bufname("%") == b:mailindex
+    " Get the index number of the line we are on
+    let index = strpart(getline("."),0,b:indexlength)
+    let startcolumn = col(".")
+  elseif bufname("%") == b:mailview
+    " In this case, get the mail item number from the variable
+    let index = b:index
+    let startcolumn = 0
+    " After marking it deleted, return to the index
+  else
+    echomsg "Can't figure out what to delete!\n"
+    return 0
+  endif
+
+  " Change the flag to D in the data window
+  call s:GotoWindow(b:maildata,'new')
+  if !search('/\v^let index=' . index,'w')
+    echoerr "Error locating mail data"
+  else
+    setlocal modifiable
+    s/let flag='.\+'/let flag='D'/
+    setlocal nomodifiable
+  endif
+  hide
+
+  " Change the flag to D in the index window
+  call s:GotoWindow(b:mailindex,'e')
+  if !search('\v^\s\*' . index . '\s\+','w')
+    echoerr "Can't find deleted item in index"
+  else
+    call s:UpdateCurrentIndexItem()
+  endif
+
+endfunction
+
+
+function! s:UpdateCurrentIndexItem()
+
+
+endfunction
 
 "---
 "
 "
 function! s:OpenMail(new)
-    " Get the start/end info from the current index line
-    let location = substitute(getline("."),'\v^.*«','','')
-    let start     = substitute(location,',.*','','')
-    let location  = substitute(location,'^[^,]\+,','','')
-    let headerend = substitute(location,',.*','','')
-    let location  = substitute(location,'^[^,]\+,','','')
-    let end = location
+    " Get the index number from the current line
+    let index = substitute(strpart(getline("."),0,b:indexlength),'\v^\s+','','')
+    call s:GotoWindow(b:maildata,'new')
+    exec "0/^let index=" . index
+    exec getline(".")
+    " hide maildata
+    hide
 
     if hlexists("DisplayedMessage")
       syn clear DisplayedMessage
@@ -405,12 +634,13 @@ function! s:OpenMail(new)
     "exec 'syn match DisplayedMessage ".\%' . line(".") . 'l"'
 
     call s:GetMailMsg(start,end,a:new)
+    let b:index = index
 endfunction
 
 function! s:GetMailMsg(start,end,new)
-    call s:GotoWindow(b:maildata,'new')
+    call s:GotoWindow(b:mailfile,'new')
     exec "silent " . a:start . "," a:end . "y a"
-    call s:CloseWindow(b:maildata)
+    call s:CloseWindow(b:mailfile)
     call s:GotoWindow(b:mailview,a:new)
     setlocal modifiable
     let b:start = a:start
@@ -431,13 +661,25 @@ endfunction
 
 function! s:FilterHeader()
     let l=getline(".")
+
+    if (l =~ '\v^\s+')
+        if b:deleted_previous
+            silent delete
+        endif
+        return
+    endif
+
+    let b:deleted_previous = 0
     if (b:hideheaders != "") && (l =~ b:hideheaders)
         silent delete
+        let b:deleted_previous = 1
     endif
 
     if (b:showheaders != "") && (l !~ b:showheaders)
         silent delete
+        let b:deleted_previous = 1
     endif
+
 endfunction
 
 function! s:ToggleHeaders()
@@ -456,22 +698,56 @@ endfunction
 "---
 " Compare dates
 "
+" This isn't really right, but I don't have a way to convert string dates to
+" numbers
 function! s:DateCmp(line1,line2,direction)
-    return 0
+    exec a:line1
+    let date1=date
+    exec a:line2
+    return s:StrCmp(date1,date,a:direction)
 endfunction
 
 "---
 " Compare From
 "
 function! s:FromCmp(line1,line2,direction)
-    return 0
+    exec a:line1
+    let from1=from
+    let index1=index
+    exec a:line2
+    let c = s:StrCmp(from1,from,a:direction)
+    if (c == 0)
+        return index1 > index ? 1 : (index1 == index ? 0 : -1)
+    else
+        return c
+    endif
 endfunction
 
 "---
 " Compare Subject
 "
 function! s:SubjectCmp(line1,line2,direction)
-    return 0
+    exec a:line1
+    let subject1=substitute(subject,'\v\c^re: ','','g')
+    let index1 = index
+    exec a:line2
+    let subject2=substitute(subject,'\v\c^re: ','','g')
+    let c = s:StrCmp(subject1,subject2,a:direction)
+    if (c == 0)
+        return index1 > index ? 1 : (index1 == index ? 0 : -1)
+    else
+        return c
+    endif
+endfunction
+
+"---
+" Compare Index
+"
+function! s:IndexCmp(line1,line2,direction)
+    exec a:line1
+    let index1=index
+    exec a:line2
+    return index1 > index ? a:direction : (index1 == index ? 0 : -a:direction)
 endfunction
 
 "---
@@ -552,60 +828,86 @@ function! s:SortReverse()
     let b:sortdirlabel  = "reverse "
   endif
   let   b:sortby=b:sortdirlabel . b:sorttype
-  call s:SortIndex("")
+  call s:SortIndex()
 endfunction
 
 "---
 " Toggle through the different sort orders
 "
 function! s:SortSelect()
-  " Select the next sort option
-  if !exists("b:sorttype")
-    let b:sorttype="date"
-  elseif b:sorttype == "date"
-    let b:sorttype="from"
-  elseif b:sorttype == "from"
-    let b:sorttype="subject"
-  else
-    let b:sorttype="date"
-  endif
+  echon "Sort by (r)everse (i)ndex, (f)rom, (s)ubject:  "
+  let b:sortdirection = 1
+  let b:sortdirlabel = ""
+  while 1
+    let c = nr2char(getchar())
+    if c == "r"
+        let b:sortdirection = -1
+        let b:sortdirlabel = "reverse"
+        echon "reverse "
+    elseif c == "f"
+        let b:sorttype = "from"
+        break
+    elseif c == "i"
+        let b:sorttype = "index"
+        break
+    elseif c == "s"
+        let b:sorttype = "subject"
+        break
+    endif
+  endwhile
   let b:sortby=b:sortdirlabel . b:sorttype
-  call s:SortIndex("")
+  echon b:sorttype
+  call s:SortIndex()
 endfunction
 
 "---
 " Sort the file listing
 "
-function! s:SortIndex(msg)
-    " Save the line we start on so we can go back there when done
-    " sorting
-    let startline = getline(".")
-    let col=col(".")
-    let lin=line(".")
+function! s:SortIndex()
 
+    " Get the index of the message we are on so we can go back there when done
+    " sorting.
+    let l = getline(".")
+    if l =~ '^"'
+        silent /^[^"]/
+        let l = getline(".")
+    endif
+    let startindex = substitute(l,'\v(\s*\S+).*','\1','')
+    let startcolumn=col(".")
+
+    let sorttype = b:sorttype
+    let sortdirection = b:sortdirection
+
+    " Sort the data, then regenerate the index from that
+    call s:GotoWindow(b:maildata,'new')
+
+    let b:sorttype = sorttype
+    let b:sortdirection = sortdirection
+
+    call s:SortData(startindex,startcolumn)
+endfunction
+
+function! s:SortData(startindex,startcolumn)
     " Allow modification
     setlocal modifiable
 
     " Do the sort
-    0
     if b:sorttype == "subject"
-      /^"=/+1,$call s:Sort("s:SubjectCmp",b:sortdirection)
+      1,$call s:Sort("s:SubjectCmp",b:sortdirection)
     elseif b:sorttype == "from"
-      /^"=/+1,$call s:Sort("s:FromCmp",b:sortdirection)
+      1,$call s:Sort("s:FromCmp",b:sortdirection)
+    elseif b:sorttype == "date"
+      1,$call s:Sort("s:DateCmp",b:sortdirection)
+    elseif b:sorttype == "index"
+      1,$call s:Sort("s:IndexCmp",b:sortdirection)
     else
-      /^"=/+1,$call s:Sort("s:DateCmp",b:sortdirection)
+      1,$call s:Sort("s:IndexCmp",b:sortdirection)
     endif
-
-    " Return to the position we started on
-    0
-    if search('\m^'.escape(startline,s:escregexp),'W') <= 0
-      execute lin
-    endif
-    execute "normal!" col . "|"
 
     " Disallow modification
     setlocal nomodifiable
 
+    call s:DataToIndex(a:startindex,a:startcolumn)
 endfunction
 
 
