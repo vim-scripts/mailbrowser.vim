@@ -1,7 +1,7 @@
 " File: mailbrowser.vim
 " Author: Mark Waggoner (mark@wagnell.com)
-" Last Change: 2001 Aug 20
-" Version: 1.3
+" Last Change: 2001 Aug 21
+" Version: 1.4
 "-----------------------------------------------------------------------------
 
 let s:mailbrowserHelp = "*mailbrowser.txt*	How to use the mailbrowser plugin
@@ -99,12 +99,27 @@ let s:mailbrowserHelp = "*mailbrowser.txt*	How to use the mailbrowser plugin
 "endif
 
 "---
-" Try to check if help is installed
+" Check if help is installed and up-to-date
+" If not, try to install it
 "
-let s:scriptdate = getftime(expand("<sfile>:p"))
 let s:helpdir    = expand("<sfile>:p:h:h") . "/doc"
 let s:helpfile   = s:helpdir . "/mailbrowser.txt"
-if expand(s:helpfile) == "" || (getftime(s:helpfile) < getftime(expand("<sfile>:p")))
+let s:create_help = 0
+
+" If help doesn't exist, see if the directory is writable
+if expand(s:helpfile) == ""
+    if filewritable(s:helpdir)
+        let s:create_help = 1
+    endif
+else
+" If help already exists, but is older than this script, see if the file is
+" writable
+    if (getftime(s:helpfile) < getftime(expand("<sfile>:p"))) && filewritable(s:helpfile)
+        let s:create_help = 1
+    endif
+endif
+" Recreate the help if needed
+if s:create_help 
     exec 'silent new' s:helpfile
     silent %d
     let @" = s:mailbrowserHelp
